@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-initdb
+  namespace: attendance-system
+data:
+  schema.sql: |
+    -- Create employees table
+    CREATE TABLE IF NOT EXISTS employees (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        department VARCHAR(50) NOT NULL,
+        role VARCHAR(20) DEFAULT 'employee',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Create attendance table
+    CREATE TABLE IF NOT EXISTS attendance (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        date DATE NOT NULL,
+        check_in TIMESTAMP,
+        check_out TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(employee_id, date)
+    );
+
+    -- Create indexes
+    CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date);
+    CREATE INDEX IF NOT EXISTS idx_employees_email ON employees(email);
+  
+  seed.sql: |
+    -- Seed employees
+    INSERT INTO employees (name, email, department, role) VALUES
+        ('John Doe', 'john.doe@company.com', 'Engineering', 'employee'),
+        ('Jane Smith', 'jane.smith@company.com', 'Engineering', 'employee'),
+        ('Alice Johnson', 'alice.johnson@company.com', 'Product', 'employee'),
+        ('Bob Williams', 'bob.williams@company.com', 'Design', 'employee'),
+        ('Charlie Brown', 'charlie.brown@company.com', 'Marketing', 'employee'),
+        ('Diana Prince', 'diana.prince@company.com', 'Sales', 'employee'),
+        ('Admin User', 'admin@company.com', 'Management', 'admin')
+    ON CONFLICT (email) DO NOTHING;
+
+    -- Seed sample attendance records (last 7 days)
+    INSERT INTO attendance (employee_id, date, check_in, check_out) VALUES
+        (1, CURRENT_DATE - INTERVAL '7 days', (CURRENT_DATE - INTERVAL '7 days') + TIME '09:00:00', (CURRENT_DATE - INTERVAL '7 days') + TIME '18:00:00'),
+        (2, CURRENT_DATE - INTERVAL '7 days', (CURRENT_DATE - INTERVAL '7 days') + TIME '08:45:00', (CURRENT_DATE - INTERVAL '7 days') + TIME '17:30:00'),
+        (3, CURRENT_DATE - INTERVAL '7 days', (CURRENT_DATE - INTERVAL '7 days') + TIME '09:15:00', (CURRENT_DATE - INTERVAL '7 days') + TIME '18:15:00'),
+        (1, CURRENT_DATE - INTERVAL '6 days', (CURRENT_DATE - INTERVAL '6 days') + TIME '09:05:00', (CURRENT_DATE - INTERVAL '6 days') + TIME '18:10:00'),
+        (2, CURRENT_DATE - INTERVAL '6 days', (CURRENT_DATE - INTERVAL '6 days') + TIME '08:50:00', (CURRENT_DATE - INTERVAL '6 days') + TIME '17:45:00'),
+        (4, CURRENT_DATE - INTERVAL '6 days', (CURRENT_DATE - INTERVAL '6 days') + TIME '09:00:00', (CURRENT_DATE - INTERVAL '6 days') + TIME '18:00:00'),
+        (1, CURRENT_DATE - INTERVAL '5 days', (CURRENT_DATE - INTERVAL '5 days') + TIME '08:55:00', (CURRENT_DATE - INTERVAL '5 days') + TIME '17:55:00'),
+        (3, CURRENT_DATE - INTERVAL '5 days', (CURRENT_DATE - INTERVAL '5 days') + TIME '09:10:00', (CURRENT_DATE - INTERVAL '5 days') + TIME '18:20:00')
+    ON CONFLICT (employee_id, date) DO NOTHING;
