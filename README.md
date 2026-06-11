@@ -1,6 +1,6 @@
 # Attendance Tracker System - Kubernetes Demo
 
-A production-ready Kubernetes deployment of an Attendance Tracking application featuring automated rollouts, TLS encryption, and a complete microservices architecture.
+A production-ready Kubernetes deployment of an Attendance Tracking application featuring blue-green deployment strategy, TLS encryption, and a complete microservices architecture.
 
 ## 📋 Table of Contents
 
@@ -18,7 +18,7 @@ A production-ready Kubernetes deployment of an Attendance Tracking application f
 This project demonstrates a complete Kubernetes deployment of an Attendance Tracker System with:
 
 - **Multi-tier Architecture**: Frontend, Backend API, and Database layers
-- **Progressive Deployment**: Argo Rollouts for canary and blue-green deployments
+- **Blue-Green Deployment**: Zero-downtime deployments with instant rollback capability
 - **Secure Access**: HTTPS/TLS encryption with NGINX Ingress
 - **Data Persistence**: PostgreSQL StatefulSet with persistent volumes
 - **Configuration Management**: ConfigMaps and Secrets for environment configuration
@@ -73,7 +73,7 @@ This project demonstrates a complete Kubernetes deployment of an Attendance Trac
 - **Environment**: Production
 - **Location**: Exposed at Ingress path `/api`
 - **Namespace**: `attendance-system`
-- **Replicas**: 2 (managed by Argo Rollout)
+- **Replicas**: 2 (Blue-Green deployment)
 
 ### Database Service
 - **Type**: StatefulSet (PostgreSQL)
@@ -92,17 +92,18 @@ This project demonstrates a complete Kubernetes deployment of an Attendance Trac
   - `/api` → Backend Service (port 3000)
   - `/` → Frontend Service (port 80)
 
-### Progressive Deployment
-- **Technology**: Argo Rollouts
-- **Namespace**: `argo-rollouts`
-- **Features**: Canary deployments, blue-green deployments, automated rollback
+### Blue-Green Deployment Strategy
+- **Approach**: Two identical production environments (Blue and Green)
+- **Active Environment**: Service routes to one environment at a time
+- **Zero Downtime**: Switch traffic instantly between versions
+- **Quick Rollback**: Revert to previous version in seconds
+- **Testing**: Full smoke tests on inactive environment before switch
 
 ## 🚀 Prerequisites
 
 - Kubernetes cluster (v1.20+)
 - `kubectl` CLI tool configured
 - NGINX Ingress Controller installed
-- Argo Rollouts controller installed
 
 ### Local Testing with minikube/Docker Desktop
 
@@ -125,7 +126,9 @@ k8s-Demo/
 ├── backend/
 │   ├── configmap.yaml          # Backend environment configuration
 │   ├── secret.yaml             # Database credentials
-│   └── service.yaml            # Backend API service
+│   ├── service.yaml            # Backend API service
+│   ├── deployment-blue.yaml    # Blue deployment (v1)
+│   └── deployment-green.yaml   # Green deployment (v2)
 │
 ├── database/
 │   ├── configmap.yaml          # PostgreSQL configuration
@@ -136,20 +139,26 @@ k8s-Demo/
 ├── frontend/
 │   ├── configmap.yaml          # Frontend configuration
 │   ├── service.yaml            # Frontend service
-│   └── service-preview.yaml    # Preview service for testing
+│   ├── deployment-blue.yaml    # Blue deployment (v1)
+│   └── deployment-green.yaml   # Green deployment (v2)
 │
-├── ingress/
-│   ├── ingress.yaml            # NGINX Ingress routing rules
-│   ├── nginx-ingress-controller.yaml  # NGINX controller setup
-│   └── tls-secret.yaml         # TLS certificate secret
-│
-└── rollouts/
-    ├── argo-rollouts-install.yaml     # Argo Rollouts deployment
-    ├── backend-rollout.yaml           # Backend progressive deployment
-    └── frontend-rollout.yaml          # Frontend progressive deployment
+└── ingress/
+    ├── ingress.yaml            # NGINX Ingress routing rules
+    ├── nginx-ingress-controller.yaml  # NGINX controller setup
+    └── tls-secret.yaml         # TLS certificate secret
 ```
 
 ## 🔧 Deployment
+
+For Minikube:
+minikube start --cpus=4 --memory=6144 --driver=docker
+minikube addons enable ingress
+kubectl auth can-i get pods --as=system:serviceaccount:ingress-nginx:ingress-nginx -n ingress-nginx
+kubectl describe clusterrolebinding ingress-nginx
+
+for Argo if using:
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 ### 1. Create Namespace
 
@@ -163,13 +172,7 @@ kubectl apply -f namespace.yaml
 kubectl apply -f ingress/nginx-ingress-controller.yaml
 ```
 
-### 3. Install Argo Rollouts
-
-```bash
-kubectl apply -f rollouts/argo-rollouts-install.yaml
-```
-
-### 4. Deploy Database
+### 3. Deploy Database
 
 ```bash
 kubectl apply -f database/
@@ -196,22 +199,10 @@ kubectl apply -f frontend/
 kubectl apply -f rollouts/frontend-rollout.yaml
 ```
 
-### 7. Configure Ingress and TLS
+### 6. Configure Ingress and TLS
 
 ```bash
 kubectl apply -f ingress/tls-secret.yaml
-
-
-MSYS_NO_PATHCONV=1 openssl req -x509 -nodes -days 365 \
--newkey rsa:2048 \
--keyout tls.key \
--out tls.crt \
--subj "/CN=attendance.local/O=Attendance System"
-
-Verify:
-kubectl get secret -n attendance-system
-kubectl describe secret attendance-tls -n attendance-system
-
 kubectl apply -f ingress/ingress.yaml
 ```
 
@@ -227,27 +218,108 @@ kubectl apply -f namespace.yaml
 echo "Installing NGINX Ingress..."
 kubectl apply -f ingress/nginx-ingress-controller.yaml
 
-echo "Installing Argo Rollouts..."
-kubectl apply -f rollouts/argo-rollouts-install.yaml
-
 echo "Deploying database..."
 kubectl apply -f database/
 kubectl wait --for=condition=ready pod -l app=postgresql -n attendance-system --timeout=300s
 
-echo "Deploying backend..."
-kubectl apply -f backend/
-kubectl apply -f rollouts/backend-rollout.yaml
+echo "Deploying backend (Blue)..."
+kubectl apply -f backend/configmap.yaml
+kubectl apply -f backend/secret.yaml
+kubectl apply -f backend/deployment-blue.yaml
+kubectl apply -f backend/service.yaml
 
-echo "Deploying frontend..."
-kubectl apply -f frontend/
-kubectl apply -f rollouts/frontend-rollout.yaml
+echo "Deploying frontend (Blue)..."
+kubectl apply -f frontend/configmap.yaml
+kubectl apply -f frontend/deployment-blue.yaml
+kubectl apply -f frontend/service.yaml
 
-echo "Configuring ingress..."
+echo "Configuring ingress and TLS..."
 kubectl apply -f ingress/tls-secret.yaml
 kubectl apply -f ingress/ingress.yaml
 
 echo "Deployment complete!"
 ```
+
+## 🔄 Blue-Green Deployment Workflow
+
+### Initial Setup
+
+The initial deployment uses the **Blue** environment:
+
+```bash
+# Deploy Blue environment (initial production)
+kubectl apply -f backend/deployment-blue.yaml
+kubectl apply -f frontend/deployment-blue.yaml
+
+# The service routes to Blue by default
+kubectl get deployment -n attendance-system
+```
+
+### Deploying a New Version (Switch to Green)
+
+When you have a new version ready:
+
+```bash
+# 1. Deploy the new version to Green environment
+kubectl apply -f backend/deployment-green.yaml
+kubectl apply -f frontend/deployment-green.yaml
+
+# 2. Wait for Green pods to be ready
+kubectl wait --for=condition=ready pod -l version=green -n attendance-system --timeout=300s
+
+# 3. Run smoke tests on Green environment
+kubectl port-forward svc/backend-green 3000:3000 -n attendance-system &
+curl http://localhost:3000/health
+kill %1
+
+# 4. If tests pass, switch traffic to Green
+# Update the service selector to point to Green
+kubectl patch service backend-service -n attendance-system \
+  -p '{"spec":{"selector":{"version":"green"}}}'
+kubectl patch service frontend-service -n attendance-system \
+  -p '{"spec":{"selector":{"version":"green"}}}'
+
+# 5. Monitor the new version
+kubectl logs -f deployment/backend-green -n attendance-system
+```
+
+### Rollback to Previous Version
+
+If issues are detected:
+
+```bash
+# Instantly switch traffic back to Blue
+kubectl patch service backend-service -n attendance-system \
+  -p '{"spec":{"selector":{"version":"blue"}}}'
+kubectl patch service frontend-service -n attendance-system \
+  -p '{"spec":{"selector":{"version":"blue"}}}'
+
+echo "Rolled back to Blue environment"
+```
+
+### Preparing Next Deployment
+
+Once Blue is stable as the production version:
+
+```bash
+# Delete old Green deployment
+kubectl delete deployment backend-green frontend-green -n attendance-system
+
+# Blue becomes the new baseline
+# Prepare new Green deployment with next version
+kubectl apply -f backend/deployment-green.yaml
+kubectl apply -f frontend/deployment-green.yaml
+```
+
+## 📊 Blue-Green Deployment States
+
+| State | Blue | Green | Production |
+|-------|------|-------|------------|
+| Initial | v1 ✅ Active | - | Blue (v1) |
+| Staging v2 | v1 ✅ Active | v2 Testing | Blue (v1) |
+| After Promotion | v1 | v2 ✅ Active | Green (v2) |
+| On Rollback | v1 ✅ Active | v2 Idle | Blue (v1) |
+| Cleanup | v2 ✅ Active | - | Blue (v2) |
 
 ## ⚙️ Configuration
 
@@ -320,18 +392,16 @@ kubectl get service postgresql-service -n attendance-system
 
 ```bash
 # Check ingress status
-
-
 kubectl get ingress -n attendance-system
 
 # Check service endpoints
 kubectl get endpoints -n attendance-system
 
 # Check pod status
-kubectl get pods -n attendance-system
+kubectl get pods -n attendance-system -o wide
 
-# Check rollout status
-kubectl get rollouts -n attendance-system
+# Check which version is active
+kubectl get service backend-service -n attendance-system -o jsonpath='{.spec.selector}'
 ```
 
 ## 🔍 Monitoring & Debugging
@@ -339,14 +409,20 @@ kubectl get rollouts -n attendance-system
 ### View Logs
 
 ```bash
-# Backend logs
-kubectl logs -f deployment/backend -n attendance-system
+# Backend Blue logs
+kubectl logs -f deployment/backend-blue -n attendance-system
+
+# Backend Green logs
+kubectl logs -f deployment/backend-green -n attendance-system
 
 # Database logs
 kubectl logs -f statefulset/postgresql -n attendance-system
 
-# Frontend logs
-kubectl logs -f deployment/frontend -n attendance-system
+# Frontend Blue logs
+kubectl logs -f deployment/frontend-blue -n attendance-system
+
+# Frontend Green logs
+kubectl logs -f deployment/frontend-green -n attendance-system
 
 # Ingress logs
 kubectl logs -f -n ingress-nginx
@@ -374,21 +450,23 @@ kubectl exec -it postgresql-0 -n attendance-system -- psql -U admin -d attendanc
 SELECT * FROM users;   # View data
 ```
 
-### Rollout Management
+### Blue-Green Deployment Management
 
 ```bash
-# View rollout status
-kubectl get rollout -n attendance-system
-kubectl describe rollout backend-rollout -n attendance-system
+# Check current active version
+kubectl get svc backend-service -n attendance-system -o jsonpath='{.spec.selector.version}'
 
-# Pause rollout
-kubectl argo rollouts pause backend-rollout -n attendance-system
+# View deployments and their status
+kubectl get deployments -n attendance-system -L version
+kubectl describe deployment backend-blue -n attendance-system
+kubectl describe deployment backend-green -n attendance-system
 
-# Resume rollout
-kubectl argo rollouts resume backend-rollout -n attendance-system
+# Check pod replicas
+kubectl get pods -n attendance-system -L version
 
-# Promote to next step
-kubectl argo rollouts promote backend-rollout -n attendance-system
+# Compare resources between Blue and Green
+kubectl top pods -n attendance-system -l version=blue
+kubectl top pods -n attendance-system -l version=green
 ```
 
 ## 🛠️ Troubleshooting
